@@ -30,6 +30,8 @@ import { Push } from '@/push';
 import * as ResponseHelper from '@/response-helper';
 import type { FrontendService } from '@/services/frontend.service';
 
+import { headerSsoMiddleware } from './middlewares/header-sso.middleware';
+
 import '@/controllers/active-workflows.controller';
 import '@/controllers/annotation-tags.controller.ee';
 import '@/controllers/auth.controller';
@@ -249,6 +251,8 @@ export class Server extends AbstractServer {
 		await handleMfaDisable();
 
 		await this.registerAdditionalControllers();
+
+		this.app.use(headerSsoMiddleware);
 
 		// register all known controllers
 		Container.get(ControllerRegistry).activate(app);
