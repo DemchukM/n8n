@@ -35,6 +35,7 @@ import ParameterIssues from '@/components/ParameterIssues.vue';
 import ResourceLocator from '@/components/ResourceLocator/ResourceLocator.vue';
 import SqlEditor from '@/components/SqlEditor/SqlEditor.vue';
 import TextEdit from '@/components/TextEdit.vue';
+import CreateEntitySuppa from '@/components/CreateEntitySuppa/CreateEntitySuppa.vue';
 
 import {
 	formatAsExpression,
@@ -1706,6 +1707,29 @@ onClickOutside(wrapper, onBlur);
 					</div>
 				</N8nOption>
 			</N8nSelect>
+
+			<CreateEntitySuppa
+				v-else-if="parameter.type === 'createEntity'"
+				ref="inputField"
+				:size="inputSize"
+				:path="path"
+				:event-bus="eventBus"
+				:parameter="parameter"
+				filterable
+				:model-value="modelValue"
+				:node="node"
+				:placeholder="
+					parameter.placeholder ? getPlaceholder() : i18n.baseText('parameterInput.select')
+				"
+				:loading="remoteParameterOptionsLoading"
+				:disabled="isReadOnly || remoteParameterOptionsLoading"
+				:title="displayTitle"
+				@update="valueChanged"
+				@keydown.stop
+				@focus="setFocus"
+				@blur="onBlur"
+			>
+			</CreateEntitySuppa>
 
 			<N8nSelect
 				v-else-if="parameter.type === 'multiOptions'"

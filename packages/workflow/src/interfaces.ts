@@ -1316,6 +1316,7 @@ export interface INodeParameters {
 
 export type NodePropertyTypes =
 	| 'boolean'
+	| 'createEntity'
 	| 'button'
 	| 'collection'
 	| 'color'

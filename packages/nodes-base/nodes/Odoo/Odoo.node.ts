@@ -86,6 +86,32 @@ export class Odoo implements INodeType {
 					},
 				],
 			},
+			{
+				displayName: 'Test Resource',
+				name: 'testSuppa',
+				//@ts-ignore
+				type: 'optionsSuppa',
+				default: '',
+				noDataExpression: true,
+				options: [
+					{
+						name: 'Contact',
+						value: 'contact',
+					},
+					{
+						name: 'Custom Resource',
+						value: 'custom',
+					},
+					{
+						name: 'Note',
+						value: 'note',
+					},
+					{
+						name: 'Opportunity',
+						value: 'opportunity',
+					},
+				],
+			},
 
 			...customResourceOperations,
 			...customResourceDescription,

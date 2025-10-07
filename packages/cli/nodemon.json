@@ -1,6 +1,7 @@
 {
 	"ignore": ["**/*.spec.ts", ".git", "node_modules"],
-	"watch": ["dist"],
+	"watch": ["dist", "../nodes-base/dist"],
 	"exec": "npm start",
-	"ext": "js"
+	"ext": "js",
+	"legacyWatch": true
 }
