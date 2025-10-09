@@ -14,6 +14,8 @@ import type {
 	NodeParameterValueType,
 } from 'n8n-workflow';
 
+import { isResourceLocatorValue } from 'n8n-workflow';
+
 import type { SelectSize } from '@n8n/design-system/types';
 import { useWorkflowHelpers } from '@/composables/useWorkflowHelpers';
 
@@ -23,14 +25,20 @@ import {
 	isValidParameterOption,
 } from '@/utils/nodeSettingsUtils';
 import { useNodeTypesStore } from '@/stores/nodeTypes.store';
-import { N8nIcon, N8nInput, N8nOption, N8nSelect } from '@n8n/design-system';
+import { N8nIcon, N8nInput, N8nInputLabel, N8nOption, N8nSelect } from '@n8n/design-system';
 import { useI18n } from '@n8n/i18n';
 import { useUIStore } from '@/stores/ui.store';
 import { useNDVStore } from '@/stores/ndv.store';
+import DraggableTarget from '@/components/DraggableTarget.vue';
+import { getMappedResult } from '@/utils/mappingUtils';
+import { hasExpressionMapping, isValueExpression } from '@/utils/nodeTypesUtils';
 import get from 'lodash/get';
 import debounce from 'lodash/debounce';
 import { completeExpressionSyntax, shouldConvertToExpression } from '@/utils/expressions';
 import { ElSwitch, ElInputNumber, ElDatePicker, ElInput } from 'element-plus';
+import ParameterOptions from '@/components/ParameterOptions.vue';
+import ExpressionParameterInput from '@/components/ExpressionParameterInput.vue';
+import { useToast } from '@/composables/useToast';
 
 type InnerSelectRef = InstanceType<typeof ElSelect>;
 
@@ -49,8 +57,14 @@ type FieldItem = {
 		| Array<INodePropertyOptions | string | number | boolean | null>;
 };
 
+type ComputedOption = { label: string; expression: string };
+
 const props = defineProps({
 	...ElSelect.props,
+	parameter: {
+		type: Object as PropType<INodeProperties>,
+		required: true,
+	},
 	path: {
 		type: String,
 		required: true,
@@ -80,6 +94,10 @@ const props = defineProps({
 		type: Boolean,
 		default: false,
 	},
+	computedOptions: {
+		type: Object as PropType<Record<string, ComputedOption[]>>,
+		default: () => ({}),
+	},
 });
 
 const emit = defineEmits<{
@@ -97,6 +115,7 @@ const inputField = ref<InstanceType<typeof N8nSelect> | null>(null);
 const i18n = useI18n();
 const uiStore = useUIStore();
 const ndvStore = useNDVStore();
+const toast = useToast();
 
 const workflowHelpers = useWorkflowHelpers();
 const nodeTypesStore = useNodeTypesStore();
@@ -110,9 +129,6 @@ const fieldLastQuery = ref<Record<string, string>>({});
 
 // Заглушки для используемых в шаблоне переменных/методов
 const shouldRedactValue = false;
-const isFocused = false;
-const onPaste = () => {};
-const displayEditDialog = () => {};
 
 function getTypeOption<T>(optionName: string): T {
 	return getParameterTypeOption<T>(props.parameter, optionName);
@@ -357,6 +373,7 @@ const isRemoteParameterOption = (option: INodePropertyOptions): boolean => {
 };
 
 const fieldSearchDebouncers = new Map<string, (q: string) => void>();
+
 function getFieldDebouncedLoader(fieldName: string, entityId?: string) {
 	let loader = fieldSearchDebouncers.get(fieldName);
 	if (!loader) {
@@ -385,7 +402,7 @@ function getRelationModelValue(item: FieldItem) {
 				return entry as string | number | boolean | null;
 			});
 		}
-		// если сохранено одиночне значение/об'єкт — оборачиваем в массив
+		// если сохранено одиночне значення/об'єкт — оборачиваем в масив
 		if (v && typeof v === 'object' && 'value' in (v as Record<string, unknown>)) {
 			return [(v as INodePropertyOptions).value as string | number | boolean | null];
 		}
@@ -513,8 +530,22 @@ function onJsonBlur() {
 }
 
 function isExpressionItem(item: FieldItem) {
-	return typeof item.value === 'string' && String(item.value).startsWith('=');
+	// return typeof item.value === 'string' && String(item.value).startsWith('=');
+	return forceShowExpression.value[item.field] === true;
 }
+
+const expressionDisplayValue = (item) => {
+	if (forceShowExpression.value[item.field]) {
+		return '';
+	}
+
+	const value = isResourceLocatorValue(item.value) ? item.value.value : item.value;
+	if (typeof value === 'string' && value.startsWith('=')) {
+		return value.slice(1);
+	}
+
+	return `${item.value ?? ''}`;
+};
 
 function onDropToItem(event: DragEvent, item: FieldItem) {
 	if (!event || !event.dataTransfer) return;
@@ -540,6 +571,94 @@ function onDropToItem(event: DragEvent, item: FieldItem) {
 	emit('update', props.modelValue);
 }
 
+// === Added for per-field expressions & drag mapping ===
+const forceShowExpression = ref<Record<string, boolean>>({});
+
+function ensureExpression(val: string) {
+	return val.startsWith('=') ? val : '=' + val;
+}
+
+function applyComputed(item: FieldItem, opt: ComputedOption) {
+	item.value = ensureExpression(opt.expression) as unknown as string;
+	emit('update', props.modelValue);
+}
+
+function enableExpression(item: FieldItem) {
+	const key = item.field;
+	forceShowExpression.value[key] = true;
+	if (typeof item.value !== 'string') {
+		item.value = '={{}}' as unknown as string;
+	}
+}
+
+function clearExpression(item: FieldItem) {
+	const key = item.field;
+	forceShowExpression.value[key] = false;
+	if (typeof item.value === 'string' && isValueExpression(props.parameter, item.value as string)) {
+		item.value = (item.value as string).replace(/^=/, '') as unknown as string;
+	}
+	emit('update', props.modelValue);
+}
+
+function onDropMapping(raw: string, item: FieldItem, _event: MouseEvent) {
+	// Don't stop propagation here — Draggable.vue relies on window mouseup to end dragging
+	_event.stopPropagation();
+	// event.preventDefault();
+	const current = item.value as unknown as string | number | boolean | null;
+	let updated: string;
+	try {
+		const mapped = getMappedResult(props.parameter as any, raw, current as unknown as any);
+		updated = typeof mapped === 'string' ? mapped : String(mapped);
+	} catch (e) {
+		updated = ensureExpression(raw);
+	}
+	forceShowExpression.value[item.field] = true;
+
+	setTimeout(() => {
+		if (props.node) {
+			props.eventBus.emit('drop', updated);
+
+			if (!ndvStore.isMappingOnboarded) {
+				toast.showMessage({
+					title: i18n.baseText('dataMapping.success.title'),
+					message: i18n.baseText('dataMapping.success.moreInfo'),
+					type: 'success',
+				});
+
+				ndvStore.setMappingOnboarded();
+			}
+
+			ndvStore.setMappingTelemetry({
+				dest_node_type: props.node.type,
+				dest_parameter: props.path,
+				dest_parameter_mode: 'expression',
+				dest_parameter_empty: '',
+				dest_parameter_had_mapping: true,
+				success: true,
+			});
+
+			// Apply the mapped value to the item and emit the update once
+			item.value = updated as unknown as string;
+
+			emit('update', props.modelValue);
+			// Safety net: ensure draggable state is reset so the preview pill doesn't stick to cursor
+			ndvStore.draggableStopDragging();
+		}
+	}, 200);
+}
+
+// === End added ===
+
+function onOptionSelected(cmd: string, item: FieldItem) {
+	if (cmd === 'addExpression') {
+		enableExpression(item);
+	} else if (cmd === 'resetValue') {
+		clearExpression(item);
+	} else if (cmd === 'removeExpression') {
+		clearExpression(item);
+	}
+}
+
 defineExpose({
 	focus,
 	blur,
@@ -560,114 +679,168 @@ defineExpose({
 		<div v-if="$slots.prepend" :class="$style.prepend">
 			<slot name="prepend" />
 		</div>
-		<div style="flex-grow: 1; width: 100%; display: flex; flex-direction: column">
+		<div style="flex-grow: 1; width: 100%; display: flex; flex-direction: column; width: 100%">
 			<template v-if="Array.isArray(modelValue)">
 				<div
 					v-for="item in modelValue"
 					:key="item.field"
-					style="margin: 10px; display: flex; justify-content: space-between; align-items: center"
-					@dragover.prevent
-					@drop="(e) => onDropToItem(e as DragEvent, item as FieldItem)"
+					style="
+						margin: 10px 0;
+						display: flex;
+						justify-content: space-between;
+						align-items: center;
+						width: 100%;
+					"
 				>
-					<div style="width: 100px">{{ item.displayName || item.field }}</div>
-
-					<N8nSelect
-						v-if="item.type === 'relation' && !isExpressionItem(item as FieldItem)"
-						:size="size"
-						filterable
-						:remote="true"
-						:remote-method="(q: string) => onRemoteSearch(item as FieldItem, q)"
-						:multiple="item.multiple === true"
-						:model-value="getRelationModelValue(item as FieldItem)"
-						:loading="fieldSelectOptionsLoading[item.field]"
-						title="Value"
-						@update:model-value="(value) => onRelationSelect(item as FieldItem, value)"
-						@keydown.stop
-						@focus="setFocusSelect(item as FieldItem)"
+					<N8nInputLabel
+						ref="inputLabel"
+						:class="[$style.wrapper]"
+						style="width: 100%"
+						:label="item.displayName || item.field"
+						:bold="true"
 					>
-						<N8nOption
-							v-for="option in fieldSelectOptions[item.field] || []"
-							:key="option.value.toString()"
-							:value="option.value"
-							:label="getOptionsOptionDisplayName(option)"
-							data-test-id="parameter-input-item"
+						<template #options>
+							<ParameterOptions
+								:parameter="parameter"
+								:value="item.value"
+								:is-read-only="false"
+								:show-options="false"
+								:show-expression-selector="true"
+								:is-content-overridden="true"
+								@update:model-value="(val) => onOptionSelected(val, item as FieldItem)"
+							/>
+						</template>
+						<DraggableTarget
+							type="mapping"
+							sticky
+							:sticky-offset="[3, 3]"
+							style="flex: 1"
+							@drop="
+								(payload: string, event: MouseEvent) =>
+									onDropMapping(payload, item as FieldItem, event)
+							"
 						>
-							<div class="list-option">
-								<div
-									class="option-headline"
-									:class="{ 'remote-parameter-option': isRemoteParameterOption(option) }"
+							<ExpressionParameterInput
+								v-if="isValueExpression(parameter, item.value)"
+								ref="inputField"
+								:model-value="expressionDisplayValue(item)"
+								:path="path"
+								:event-bus="eventBus"
+								@update:model-value="expressionUpdated"
+								@modal-opener-click="openExpressionEditorModal"
+								@focus="setFocus"
+								@blur="onBlur"
+							/>
+
+							<N8nSelect
+								v-else-if="item.type === 'relation' && !isExpressionItem(item as FieldItem)"
+								:size="size"
+								filterable
+								:remote="true"
+								:remote-method="(q: string) => onRemoteSearch(item as FieldItem, q)"
+								:multiple="item.multiple === true"
+								:model-value="getRelationModelValue(item as FieldItem)"
+								:loading="fieldSelectOptionsLoading[item.field]"
+								title="Value"
+								@update:model-value="(value) => onRelationSelect(item as FieldItem, value)"
+								@keydown.stop
+								@focus="setFocusSelect(item as FieldItem)"
+							>
+								<N8nOption
+									v-for="option in fieldSelectOptions[item.field] || []"
+									:key="option.value.toString()"
+									:value="option.value"
+									:label="getOptionsOptionDisplayName(option)"
+									data-test-id="parameter-input-item"
 								>
-									{{ getOptionsOptionDisplayName(option) }}
-								</div>
-								<div
-									v-if="option.description"
-									v-n8n-html="getOptionsOptionDescription(option)"
-									class="option-description"
-								></div>
-							</div>
-						</N8nOption>
-					</N8nSelect>
+									<div class="list-option">
+										<div
+											class="option-headline"
+											:class="{ 'remote-parameter-option': isRemoteParameterOption(option) }"
+										>
+											{{ getOptionsOptionDisplayName(option) }}
+										</div>
+										<div
+											v-if="option.description"
+											v-n8n-html="getOptionsOptionDescription(option)"
+											class="option-description"
+										></div>
+									</div>
+								</N8nOption>
+							</N8nSelect>
 
-					<ElSwitch
-						v-else-if="isType(item as FieldItem, 'boolean') && !isExpressionItem(item as FieldItem)"
-						:model-value="toBoolean(item.value as any)"
-						@update:model-value="(val: boolean) => onBooleanChanged(item as FieldItem, val)"
-					/>
+							<ElSwitch
+								v-else-if="
+									isType(item as FieldItem, 'boolean') && !isExpressionItem(item as FieldItem)
+								"
+								:model-value="toBoolean(item.value as any)"
+								@update:model-value="(val: boolean) => onBooleanChanged(item as FieldItem, val)"
+							/>
 
-					<ElInputNumber
-						v-else-if="
-							(isType(item as FieldItem, 'integer') || isType(item as FieldItem, 'float')) &&
-							!isExpressionItem(item as FieldItem)
-						"
-						:precision="isType(item as FieldItem, 'integer') ? 0 : undefined"
-						:step="isType(item as FieldItem, 'integer') ? 1 : 0.1"
-						:model-value="
-							isType(item as FieldItem, 'integer') ? toInteger(item.value) : toFloat(item.value)
-						"
-						@update:model-value="(val: number | null) => onNumberChanged(item as FieldItem, val)"
-					/>
+							<ElInputNumber
+								v-else-if="
+									(isType(item as FieldItem, 'integer') || isType(item as FieldItem, 'float')) &&
+									!isExpressionItem(item as FieldItem)
+								"
+								:precision="isType(item as FieldItem, 'integer') ? 0 : undefined"
+								:step="isType(item as FieldItem, 'integer') ? 1 : 0.1"
+								:model-value="
+									isType(item as FieldItem, 'integer') ? toInteger(item.value) : toFloat(item.value)
+								"
+								@update:model-value="
+									(val: number | null) => onNumberChanged(item as FieldItem, val)
+								"
+							/>
 
-					<ElDatePicker
-						v-else-if="isType(item as FieldItem, 'date') && !isExpressionItem(item as FieldItem)"
-						type="date"
-						:model-value="toDateObj(item.value)"
-						@update:model-value="(d: Date | null) => onDatePicked(item as FieldItem, d, 'date')"
-					/>
+							<ElDatePicker
+								v-else-if="
+									isType(item as FieldItem, 'date') && !isExpressionItem(item as FieldItem)
+								"
+								type="date"
+								:model-value="toDateObj(item.value)"
+								@update:model-value="(d: Date | null) => onDatePicked(item as FieldItem, d, 'date')"
+							/>
 
-					<ElDatePicker
-						v-else-if="
-							isType(item as FieldItem, 'datetime') && !isExpressionItem(item as FieldItem)
-						"
-						type="datetime"
-						:model-value="toDateObj(item.value)"
-						@update:model-value="(d: Date | null) => onDatePicked(item as FieldItem, d, 'datetime')"
-					/>
+							<ElDatePicker
+								v-else-if="
+									isType(item as FieldItem, 'datetime') && !isExpressionItem(item as FieldItem)
+								"
+								type="datetime"
+								:model-value="toDateObj(item.value)"
+								@update:model-value="
+									(d: Date | null) => onDatePicked(item as FieldItem, d, 'datetime')
+								"
+							/>
 
-					<ElInput
-						v-else-if="isType(item as FieldItem, 'json') && !isExpressionItem(item as FieldItem)"
-						type="textarea"
-						autosize
-						:model-value="
-							typeof item.value === 'string' ? item.value : JSON.stringify(item.value, null, 2)
-						"
-						@update:model-value="(val: string) => onJsonChanged(item as FieldItem, val)"
-						@blur="onJsonBlur"
-					/>
+							<ElInput
+								v-else-if="
+									isType(item as FieldItem, 'json') && !isExpressionItem(item as FieldItem)
+								"
+								type="textarea"
+								autosize
+								:model-value="
+									typeof item.value === 'string' ? item.value : JSON.stringify(item.value, null, 2)
+								"
+								@update:model-value="(val: string) => onJsonChanged(item as FieldItem, val)"
+								@blur="onJsonBlur"
+							/>
 
-					<N8nInput
-						v-else
-						:model-value="item.value"
-						:class="{ 'input-with-opener': true, 'ph-no-capture': shouldRedactValue }"
-						:size="size"
-						:type="getStringInputType"
-						placeholder="Enter value..."
-						data-test-id="parameter-input-field"
-						@update:model-value="(val) => updateInputValue(item as FieldItem, val)"
-						@keydown.stop
-						@focus="setFocus"
-						@blur="onBlurInput"
-						@paste="onPaste"
-					/>
+							<N8nInput
+								v-else
+								:model-value="item.value"
+								:class="{ 'input-with-opener': true, 'ph-no-capture': shouldRedactValue }"
+								:size="size"
+								:type="getStringInputType"
+								placeholder="Enter value..."
+								data-test-id="parameter-input-field"
+								@update:model-value="(val) => updateInputValue(item as FieldItem, val)"
+								@keydown.stop
+								@focus="setFocus"
+								@blur="onBlurInput"
+								@paste="onPaste"
+							/>
+						</DraggableTarget>
+					</N8nInputLabel>
 				</div>
 			</template>
 		</div>
