@@ -136,6 +136,11 @@ export class Suppa implements INodeType {
 								type: field.type,
 								entityId:
 									field.type === 'relation' ? field.relation.relation_target_entity_id : undefined,
+								enumId: field.type === 'custom_enum' ? field.custom_enum.enum_id : undefined,
+								options: (field?.items || field?.relation?.items || []).map((option: any) => ({
+									name: option.name,
+									value: option.id,
+								})),
 								value: field.id,
 								multiple: field.multiple || false,
 							}));
@@ -198,6 +203,33 @@ export class Suppa implements INodeType {
 					return [];
 				}
 			},
+
+			async searchEnumOptions(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const enumId = this.getCurrentNodeParameter('enumId') as string;
+				if (!enumId) {
+					return [];
+				}
+				const credentials = await this.getCredentials('suppaApi');
+				const requestOptions: IHttpRequestOptions = {
+					method: 'GET',
+					url: `${credentials.baseUrl}api/custom_enums/values/${enumId}`,
+					headers: {
+						Authorization: `Bearer ${credentials.apiKey}`,
+					},
+				};
+				try {
+					const response = await this.helpers.httpRequest(requestOptions);
+					if (Array.isArray(response)) {
+						return response.map((option: any) => ({
+							name: option.name,
+							value: option.id,
+						}));
+					}
+					return [];
+				} catch (error) {
+					return [];
+				}
+			},
 		},
 	};
 
@@ -233,10 +265,16 @@ export class Suppa implements INodeType {
 						throw new NodeOperationError(this.getNode(), `Невідома дія: ${action}`);
 				}
 
-				returnData.push({
-					json: result,
-					pairedItem: { item: i },
-				});
+				// returnData.push({
+				// 	json: result.map((item: any) => ({ json: item })) || result,
+				// });
+				if (Array.isArray(result)) {
+					for (const resItem of result) {
+						returnData.push({ json: resItem, pairedItem: { item: i } });
+					}
+				} else {
+					returnData.push({ json: result, pairedItem: { item: i } });
+				}
 			} catch (error) {
 				if (this.continueOnFail()) {
 					returnData.push({

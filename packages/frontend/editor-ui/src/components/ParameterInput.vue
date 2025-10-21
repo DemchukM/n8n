@@ -1731,6 +1731,16 @@ onClickOutside(wrapper, onBlur);
 			>
 			</CreateEntitySuppa>
 
+			<FilterGeneratorSuppa
+				v-else-if="parameter.type === 'filterGeneratorSuppa'"
+				:event-bus="eventBus"
+				:path="path"
+				:parameter="parameter"
+				:model-value="modelValue"
+				:node="node"
+				:title="displayTitle"
+				@update="valueChanged"
+			/>
 			<N8nSelect
 				v-else-if="parameter.type === 'multiOptions'"
 				ref="inputField"

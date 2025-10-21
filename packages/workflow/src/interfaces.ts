@@ -1317,6 +1317,7 @@ export interface INodeParameters {
 export type NodePropertyTypes =
 	| 'boolean'
 	| 'createEntity'
+	| 'filterGeneratorSuppa'
 	| 'button'
 	| 'collection'
 	| 'color'

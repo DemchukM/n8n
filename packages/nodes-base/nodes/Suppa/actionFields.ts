@@ -7,11 +7,24 @@ export const actionFields: { [key: string]: INodeProperties[] } = {
 			name: 'data',
 			type: 'createEntity',
 			placeholder: 'Add field',
-			default: {},
+			default: [],
 			typeOptions: {
 				loadOptionsMethod: 'getTableFields',
 				loadFieldSelectOptionsMethod: 'searchEntityData',
+				loadEnumOptionsMethod: 'searchEnumOptions',
 			},
+			displayOptions: {
+				show: {
+					action: ['create', 'update'],
+				},
+			},
+		},
+		{
+			displayName: 'Static Data',
+			name: 'staticData',
+			type: 'json',
+			placeholder: 'Add Static Data',
+			default: '{}',
 			displayOptions: {
 				show: {
 					action: ['create', 'update'],
@@ -29,32 +42,28 @@ export const actionFields: { [key: string]: INodeProperties[] } = {
 			placeholder: 'Введіть ID запису',
 			description: 'Унікальний ідентифікатор запису для отримання',
 		},
-		// {
-		// 	displayName: 'Поля для отримання',
-		// 	name: 'fields',
-		// 	type: 'multiOptions',
-		// 	displayOptions: {
-		// 		hide: {
-		// 			table: [''],
-		// 		},
-		// 	},
-		// 	typeOptions: {
-		// 		loadOptionsMethod: 'getTableFields',
-		// 		loadOptionsDependsOn: ['table'],
-		// 	},
-		// 	default: [],
-		// 	placeholder: 'Виберіть поля',
-		// 	description: 'Choose from the list, or specify IDs using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
-		// },
 	],
 
 	getByFilter: [
 		{
 			displayName: 'Фільтри',
 			name: 'filters',
+			type: 'filterGeneratorSuppa',
+			default: '{}',
+			placeholder: '',
+			description: "JSON об'єкт з фільтрами для пошуку записів",
+			typeOptions: {
+				loadOptionsMethod: 'getTableFields',
+				loadFieldSelectOptionsMethod: 'searchEntityData',
+				loadEnumOptionsMethod: 'searchEnumOptions',
+			},
+		},
+		{
+			displayName: 'Filters (Advanced)',
+			name: 'filtersAdvanced',
 			type: 'json',
 			default: '{}',
-			placeholder: '{ "field": "value", "field2": { "operator": "gt", "value": 10 } }',
+			placeholder: '',
 			description: "JSON об'єкт з фільтрами для пошуку записів",
 		},
 		{
@@ -156,8 +165,25 @@ export const actionFields: { [key: string]: INodeProperties[] } = {
 			description: 'Унікальний ідентифікатор запису для оновлення',
 		},
 		{
-			displayName: 'Дані для оновлення',
+			displayName: 'Data',
 			name: 'data',
+			type: 'createEntity',
+			placeholder: 'Add field',
+			default: [],
+			typeOptions: {
+				loadOptionsMethod: 'getTableFields',
+				loadFieldSelectOptionsMethod: 'searchEntityData',
+				loadEnumOptionsMethod: 'searchEnumOptions',
+			},
+			displayOptions: {
+				show: {
+					action: ['create', 'update'],
+				},
+			},
+		},
+		{
+			displayName: 'Дані для оновлення',
+			name: 'staticData',
 			type: 'json',
 			default: '{}',
 			required: true,

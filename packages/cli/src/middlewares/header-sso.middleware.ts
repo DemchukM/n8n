@@ -48,20 +48,41 @@ export async function ensurePersonalProject(user: User) {
 const VALIDATE_URL =
 	process.env.IFRAME_SSO_VALIDATE_URL ?? 'https://smart.modern-expo.com/auth/token/';
 
+interface SsoTokenPayload {
+	email: string;
+	name?: string;
+	roles?: string[];
+}
+interface ValidateResponse {
+	token?: SsoTokenPayload;
+}
+
 export const headerSsoMiddleware: RequestHandler = async (req: APIRequest, _res, next) => {
 	try {
-		const token = (req.query as { token?: string }).token;
+		// Получаем токен из query, либо из заголовков (X-Access-Token или Authorization: Bearer ...)
+		const queryToken = (req.query as { token?: string }).token;
+		const headerToken = (req.headers['x-access-token'] as string) || undefined;
+		const authHeader = (req.headers['authorization'] as string) || '';
+		const bearerToken = authHeader.toLowerCase().startsWith('bearer ')
+			? authHeader.slice(7).trim()
+			: undefined;
+		const token = queryToken ?? headerToken ?? bearerToken;
 		if (!token || !VALIDATE_URL) return next();
 
-		const { data } = await axios.get<{ token?: Record<string, any> }>(VALIDATE_URL, {
-			headers: { 'X-Access-Token': token },
+		const headers: Record<string, string> = {};
+		headers['X-Access-Token'] = token;
+		const { data } = await axios.get<ValidateResponse>(VALIDATE_URL, {
+			headers,
 			timeout: 5000,
 		});
 		if (!data?.token?.email) return next();
 		const userRepository = Container.get(UserRepository);
-		let user = await userRepository.findOne({ where: { email: data?.token?.email } });
+		let user = await userRepository.findOne({ where: { email: data.token.email } });
 
-		const isAdmin = data?.token?.roles?.includes('admin');
+		console.log('Header-SSO token data:', user, data.token);
+
+		const roles = Array.isArray(data.token.roles) ? data.token.roles : [];
+		const isAdmin = roles.includes('admin');
 		const assignedRole = isAdmin ? 'global:owner' : 'global:member';
 
 		if (!user) {
@@ -69,12 +90,13 @@ export const headerSsoMiddleware: RequestHandler = async (req: APIRequest, _res,
 			// 	(await roleRepository.findOne({ where: { name: 'member' } })) ??
 			// 	(await roleRepository.findOne({ where: { name: 'user' } }));
 			//
-			const firstName = data?.token.name?.split(' ').slice(0, -1).join(' ') ?? '';
-			const lastName = data?.token.name?.split(' ').slice(-1).join(' ') ?? '';
+			const name = data.token.name ?? '';
+			const [firstName, ...rest] = name.split(' ');
+			const lastName = rest.join(' ');
 			const password = await hash(uuid(), 10); // випадковий
 			user = userRepository.create({
 				id: uuid(),
-				email: data?.token.email,
+				email: data.token.email,
 				firstName,
 				lastName,
 				role: assignedRole,
@@ -94,13 +116,15 @@ export const headerSsoMiddleware: RequestHandler = async (req: APIRequest, _res,
 
 		(req as AuthenticatedRequest).user = user;
 
-		authService.issueCookie(_res, user, false, req.browserId);
+		// Не используем browserId при выпуске куки в SSO-потоке, чтобы не требовать заголовок на последующих запросах
+		authService.issueCookie(_res, user, false);
 
 		const eventService = Container.get(EventService);
 		eventService.emit('user-logged-in', {
 			user,
 			authenticationMethod: 'email',
 		});
+		console.log(`Header-SSO: User ${user.email} logged in via SSO`);
 		next();
 	} catch (e) {
 		const logger = Container.get(Logger);

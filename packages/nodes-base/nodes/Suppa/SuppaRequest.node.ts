@@ -9,19 +9,18 @@ import type {
 	IDataObject,
 	IHookFunctions,
 } from 'n8n-workflow';
-import { NodeConnectionTypes } from 'n8n-workflow';
-import { ApplicationError } from 'n8n-workflow';
+import { NodeConnectionTypes, ApplicationError } from 'n8n-workflow';
 
-export class SuppaTrigger implements INodeType {
+export class SuppaRequest implements INodeType {
 	description: INodeTypeDescription = {
-		displayName: 'SUPPA Event Trigger',
-		name: 'suppaTrigger',
+		displayName: 'SUPPA Request Trigger',
+		name: 'suppaRequest',
 		icon: 'file:suppa.svg',
 		group: ['trigger'],
 		version: 1,
 		description: 'Get data from Suppa API via webhooks',
 		defaults: {
-			name: 'Suppa Event Trigger',
+			name: 'Suppa Request Trigger',
 		},
 		inputs: [],
 		outputs: [NodeConnectionTypes.Main],
@@ -41,80 +40,40 @@ export class SuppaTrigger implements INodeType {
 		],
 		properties: [
 			{
-				displayName: 'Таблиця Name or ID',
-				name: 'table',
+				displayName: 'Request Name or ID',
+				name: 'request',
 				type: 'options',
 				default: '',
 				typeOptions: {
-					loadOptionsMethod: 'searchTables',
+					loadOptionsMethod: 'searchRequests',
 				},
 				required: true,
 				placeholder: 'Виберіть таблицю',
 				description:
-					'Виберіть таблицю для виконання дії. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+					'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 			},
 			{
-				displayName: 'Event',
-				name: 'event',
-				type: 'multiOptions',
-				noDataExpression: true,
-				options: [
-					{
-						name: 'Create',
-						value: 'insert',
-					},
-					{
-						name: 'Update',
-						value: 'update',
-					},
-					{
-						name: 'Delete',
-						value: 'delete',
-					},
-				],
-				default: ['insert'],
-			},
-			{
-				displayName: 'Поля Names or IDs',
-				name: 'fields',
-				type: 'multiOptions',
-				displayOptions: {
-					hide: {
-						table: [''],
-					},
-				},
+				displayName: 'Language Name or ID',
+				name: 'language',
+				type: 'options',
+				default: 'author_language',
 				typeOptions: {
-					loadOptionsMethod: 'getTableFields',
-					loadOptionsDependsOn: ['table'],
+					loadOptionsMethod: 'searchLanguages',
 				},
-				default: [],
-				placeholder: 'Виберіть поля',
+				placeholder: 'Select a language',
 				description:
-					'Choose from the list, or specify IDs using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
-			},
-			{
-				displayName: 'Фільтри',
-				name: 'filters',
-				type: 'filterGeneratorSuppa',
-				default: '{}',
-				placeholder: '',
-				description: "JSON об'єкт з фільтрами для пошуку записів",
-				typeOptions: {
-					loadOptionsMethod: 'getTableFields',
-					loadFieldSelectOptionsMethod: 'searchEntityData',
-					loadEnumOptionsMethod: 'searchEnumOptions',
-				},
+					'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 			},
 		],
 	};
 
 	methods = {
 		loadOptions: {
-			async searchTables(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+			async searchRequests(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const credentials = await this.getCredentials('suppaApi');
 				const requestOptions: IHttpRequestOptions = {
 					method: 'GET',
-					url: `${credentials.baseUrl}api/all_entities`,
+					url: `${credentials.baseUrl}api/form_views/requests`,
 					headers: {
 						Authorization: `Bearer ${credentials.apiKey}`,
 					},
@@ -130,121 +89,44 @@ export class SuppaTrigger implements INodeType {
 					return [];
 				}
 			},
-
-			async getTableFields(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-				const tableId = this.getCurrentNodeParameter('table') as string;
-				if (!tableId) {
-					return [];
-				}
-				const credentials = await this.getCredentials('suppaApi');
-				const requestOptions: IHttpRequestOptions = {
-					method: 'GET',
-					url: `${credentials.baseUrl}api/entity_props/${tableId}`,
-					headers: {
-						Authorization: `Bearer ${credentials.apiKey}`,
-					},
-				};
-
-				try {
-					const response = await this.helpers.httpRequest(requestOptions);
-					if (Array.isArray(response)) {
-						return response
-							.filter((field: any) => field.id !== 'entity_options')
-							.map((field: any) => ({
-								name: field.title || field.name,
-								type: field.type,
-								entityId:
-									field.type === 'relation' ? field.relation.relation_target_entity_id : undefined,
-								enumId: field.type === 'custom_enum' ? field.custom_enum.enum_id : undefined,
-								options: (field?.items || field?.relation?.items || []).map((option: any) => ({
-									name: option.name,
-									value: option.id,
-								})),
-								value: field.id,
-								multiple: field.multiple || false,
-							}));
-					}
-					return [];
-				} catch (error) {
-					return [];
-				}
-			},
-
-			async searchEntityData(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-				// const tableId = this.getCurrentNodeParameter('table') as string;
-				// const fieldName = this.getCurrentNodeParameter('fieldName') as string;
-				const entityId = this.getCurrentNodeParameter('entityId') as string;
-				const searchTerm = (this.getCurrentNodeParameter('search') as string) || '';
-
-				if (!entityId) {
-					return [];
-				}
-
-				const body = {
-					limit: 20,
-					offset: 0,
-					filter: {
-						operator: 'and',
-						conditions: [
-							{
-								field: 'name',
-								comparator: 'like',
-								value: searchTerm,
-								type: 'condition',
-							},
-						],
-						type: 'conjunction',
-					},
-				};
-
+			async searchLanguages(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const credentials = await this.getCredentials('suppaApi');
 				const requestOptions: IHttpRequestOptions = {
 					method: 'POST',
-					url: `${credentials.baseUrl}api/instances/search/${entityId}`,
+					url: `${credentials.baseUrl}api/instances/search/LanguageUI`,
 					headers: {
 						Authorization: `Bearer ${credentials.apiKey}`,
 					},
-					body,
+					body: {
+						limit: 100,
+						fields: {
+							id: {},
+							name: {},
+							lang_id: {},
+						},
+					},
 				};
-				console.log('Response from entity data search:', JSON.stringify(requestOptions));
-				try {
-					const response = await this.helpers.httpRequest(requestOptions);
-					// console.log('Response from entity data search:', response);
-					if (Array.isArray(response)) {
-						return response.map((item: any) => ({
-							name: item.name || item.id,
-							value: item.id,
-						}));
-					}
-					return [];
-				} catch (error) {
-					console.log('Error fetching entity data:', error);
-					return [];
-				}
-			},
 
-			async searchEnumOptions(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-				const enumId = this.getCurrentNodeParameter('enumId') as string;
-				if (!enumId) {
-					return [];
-				}
-				const credentials = await this.getCredentials('suppaApi');
-				const requestOptions: IHttpRequestOptions = {
-					method: 'GET',
-					url: `${credentials.baseUrl}api/custom_enums/values/${enumId}`,
-					headers: {
-						Authorization: `Bearer ${credentials.apiKey}`,
+				const staticItems = [
+					{
+						name: "Author's Language",
+						value: 'author_language',
 					},
-				};
+					{
+						name: "User's Language",
+						value: 'user_language',
+					},
+				];
+
 				try {
 					const response = await this.helpers.httpRequest(requestOptions);
-					if (Array.isArray(response)) {
-						return response.map((option: any) => ({
-							name: option.name,
-							value: option.id,
-						}));
-					}
-					return [];
+					return [
+						...staticItems,
+						...response.map((lang: any) => ({
+							name: lang.name,
+							value: lang.lang_id,
+						})),
+					];
 				} catch (error) {
 					return [];
 				}
@@ -284,7 +166,7 @@ export class SuppaTrigger implements INodeType {
 						}
 					} catch (error) {
 						// Якщо помилка 404, то webhook не існує, видаляємо збережений ID
-						if (error.response?.status === 404 || error.statusCode === 404) {
+						if ((error as any).response?.status === 404 || (error as any).statusCode === 404) {
 							delete workflowStaticData.webhookId;
 						}
 					}
@@ -292,7 +174,7 @@ export class SuppaTrigger implements INodeType {
 
 				// Якщо webhookId не існує або webhook не знайдено, шукаємо за URL та таблицею
 				const webhookUrl = this.getNodeWebhookUrl('default');
-				const table = this.getNodeParameter('table') as string;
+				const table = 'b20113e0-d9be-4281-bf23-7f546a41e07f';
 
 				const requestOptions: IHttpRequestOptions = {
 					method: 'POST',
@@ -308,12 +190,18 @@ export class SuppaTrigger implements INodeType {
 							entity_id: {},
 							is_active: {},
 							deleted: {},
+							filter: {},
 						},
 					},
 				};
 
 				try {
 					const response = await this.helpers.httpRequest(requestOptions);
+
+					if ((response as any).status !== 200) {
+						throw new ApplicationError(`Unexpected response status: ${(response as any).status}`);
+					}
+
 					const webhooks = Array.isArray(response) ? response : [response];
 
 					this.logger.debug(`Webhook search response: ${JSON.stringify(webhooks)}`);
@@ -324,7 +212,13 @@ export class SuppaTrigger implements INodeType {
 							webhook.url === webhookUrl &&
 							webhook.entity_id === table &&
 							webhook.is_active === true &&
-							!webhook.deleted,
+							!webhook.deleted &&
+							webhook.filter?.conditions &&
+							Array.isArray(webhook.filter.conditions) &&
+							webhook.filter.conditions.length === 1 &&
+							webhook.filter.conditions[0].field === 'submitForm_id' &&
+							webhook.filter.conditions[0].comparator === '=' &&
+							webhook.filter.conditions[0].value === this.getNodeParameter('request'),
 					);
 
 					if (existingWebhook) {
@@ -341,31 +235,41 @@ export class SuppaTrigger implements INodeType {
 
 			async create(this: IHookFunctions): Promise<boolean> {
 				const webhookUrl = this.getNodeWebhookUrl('default');
-				const table = this.getNodeParameter('table') as string;
-				const events = this.getNodeParameter('event') as string[];
-				const fields = this.getNodeParameter('fields') as string[];
-				const filters = this.getNodeParameter('filters') as IDataObject;
+				const table = 'b20113e0-d9be-4281-bf23-7f546a41e07f';
+				const events = ['insert'];
 				const credentials = await this.getCredentials('suppaApi');
+				const requestNameOrId = this.getNodeParameter('request') as string;
 
 				this.logger.debug(
 					`Creating webhook for table: ${table}, events: ${events}, URL: ${webhookUrl}`,
 				);
 
-				if (!Array.isArray(events) || events.length === 0) {
-					throw new ApplicationError('Не вибрано жодної події для підписки (events)');
+				if (!requestNameOrId) {
+					throw new ApplicationError('Не вказано форму (request) для підписки вебхука');
 				}
-				if (!table) {
-					throw new ApplicationError('Не вказано таблицю (table) для підписки вебхука');
-				}
+
+				const filters = {
+					conditions: [
+						{
+							comparator: '=',
+							field: 'submitForm_id',
+							type: 'condition',
+							value: requestNameOrId,
+						},
+					],
+					operator: 'and',
+					type: 'conjunction',
+				};
 
 				const subscribeData: IDataObject = {
 					url: webhookUrl,
 					entity_id: table,
 					events,
 					is_active: true,
-					update_fields: fields.length > 0 ? fields : undefined,
-					filters: filters && Object.keys(filters).length > 0 ? filters : undefined,
+					filter: filters,
 				};
+
+				console.log('Subscribe data:', JSON.stringify(subscribeData));
 
 				const requestOptions: IHttpRequestOptions = {
 					method: 'POST',
@@ -453,12 +357,10 @@ export class SuppaTrigger implements INodeType {
 
 	// Обробка вхідних вебхук запитів
 	async webhook(this: IWebhookFunctions): Promise<IWebhookResponseData> {
-		const bodyData = this.getBodyData();
+		const bodyData = this.getBodyData() as IDataObject;
 
 		// Перевіряємо, чи порожній payload
 		if (Object.keys(bodyData).length === 0) {
-			this.logger.info('Received health-check request, responding with 200 OK.');
-
 			const res = this.getResponseObject();
 			res.status(200).json({
 				message: 'Success',
@@ -469,7 +371,119 @@ export class SuppaTrigger implements INodeType {
 			};
 		}
 
-		this.logger.debug(`Received webhook data: ${JSON.stringify(bodyData)}`);
+		const language = this.getNodeParameter('language') as string;
+		const credentials = await this.getCredentials('suppaApi');
+		const requestNameOrId = this.getNodeParameter('request') as string;
+		let userId: string | undefined;
+		if (language === 'user_language') {
+			const instance = bodyData.instance as IDataObject | undefined;
+			userId = instance?.['created_by_id'] as string | undefined;
+		} else if (language === 'author_language') {
+			const formDataRequestOptions: IHttpRequestOptions = {
+				method: 'GET',
+				url: `${credentials.baseUrl}api/instance/FormView/${requestNameOrId}`,
+				headers: {
+					Authorization: `Bearer ${credentials.apiKey}`,
+				},
+			};
+			const formData = (await this.helpers.httpRequest(formDataRequestOptions)) as IDataObject;
+			userId = formData['created_by_id'] as string | undefined;
+		}
+
+		let userLang: string | undefined;
+		if (userId) {
+			const userLangRequestOptions: IHttpRequestOptions = {
+				method: 'GET',
+				url: `${credentials.baseUrl}api/instance/SmartUser/${userId}`,
+				headers: {
+					Authorization: `Bearer ${credentials.apiKey}`,
+				},
+			};
+			const userData = (await this.helpers.httpRequest(userLangRequestOptions)) as IDataObject;
+			userLang = userData['language_id'] as string | undefined;
+		} else {
+			userLang = language;
+		}
+
+		const localizationRequestOptions: IHttpRequestOptions = {
+			method: 'POST',
+			url: `${credentials.baseUrl}/api/localization?languages=${userLang}`,
+			headers: {
+				Authorization: `Bearer ${credentials.apiKey}`,
+				'Content-Type': 'application/json',
+			},
+			body: {
+				filter: {
+					conditions: [
+						{
+							comparator: '=',
+							field: 'target_id',
+							type: 'condition',
+							value: requestNameOrId,
+						},
+					],
+					operator: 'and',
+					type: 'conjunction',
+				},
+			},
+		};
+
+		const localizationResp = await this.helpers.httpRequest(localizationRequestOptions);
+		if (Array.isArray(localizationResp) && localizationResp.length > 0) {
+			const translationKeys = (localizationResp[0] as IDataObject).translation_keys as
+				| IDataObject
+				| undefined;
+			if (translationKeys) {
+				(bodyData as IDataObject).localization = translationKeys;
+			}
+
+			// Пошук ключа перекладу з безпечними перевірками
+			const searchTranslationKey = (value: string): string | undefined => {
+				if (!translationKeys || typeof translationKeys !== 'object') return undefined;
+				return Object.keys(translationKeys as object).find((tKey: string) =>
+					tKey.includes(`.${value}`),
+				);
+			};
+
+			// Допоміжний тип-гарда для перевірки, що значення — звичайний об'єкт
+			const isRecord = (v: unknown): v is Record<string, unknown> =>
+				typeof v === 'object' && v !== null && !Array.isArray(v);
+			// Аккуратно приводимо formData до объекта і захищаємо від undefined/null
+			let formDataObj: IDataObject | undefined;
+			const instanceRaw = (bodyData as IDataObject).instance as unknown;
+			if (instanceRaw && typeof instanceRaw === 'object' && !Array.isArray(instanceRaw)) {
+				const maybeFormData = (instanceRaw as IDataObject).formData as unknown;
+				if (maybeFormData && typeof maybeFormData === 'object' && !Array.isArray(maybeFormData)) {
+					formDataObj = maybeFormData as IDataObject;
+				}
+			}
+			const formDataKeys = formDataObj ? Object.keys(formDataObj as object) : [];
+			const formDataPreview: IDataObject = formDataKeys.reduce((acc: IDataObject, key: string) => {
+				const value = (formDataObj as IDataObject)[key];
+				const tKey =
+					searchTranslationKey(`${key}.label`) ||
+					searchTranslationKey(`${key}.placeholder`) ||
+					searchTranslationKey(`${key}.name`);
+				const representation =
+					tKey && translationKeys ? String((translationKeys as IDataObject)[tKey] ?? key) : key;
+				const formatValueForPreview = (v: unknown): string => {
+					if (isRecord(v)) {
+						const nameVal = (v as Record<string, unknown>).name;
+						return typeof nameVal === 'string' ? nameVal : JSON.stringify(v);
+					} else if (Array.isArray(v)) {
+						return JSON.stringify(v);
+					} else {
+						return String(v);
+					}
+				};
+				Object.assign(acc, {
+					[key]: `<b>${representation}</b>: ${formatValueForPreview(value)}`,
+				});
+				return acc;
+			}, {});
+
+			(bodyData as IDataObject).formDataPreview = formDataPreview;
+		}
 
 		return {
 			workflowData: [this.helpers.returnJsonArray([bodyData])],

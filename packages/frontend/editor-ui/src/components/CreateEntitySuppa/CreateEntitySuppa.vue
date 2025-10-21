@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ElSelect } from 'element-plus';
+import { ElSelect, ElSwitch, ElInputNumber, ElDatePicker, ElInput } from 'element-plus';
 import type { PropType } from 'vue';
 import type { EventBus } from '@n8n/utils/event-bus';
 import { createEventBus } from '@n8n/utils/event-bus';
@@ -25,20 +25,18 @@ import {
 	isValidParameterOption,
 } from '@/utils/nodeSettingsUtils';
 import { useNodeTypesStore } from '@/stores/nodeTypes.store';
-import { N8nIcon, N8nInput, N8nInputLabel, N8nOption, N8nSelect } from '@n8n/design-system';
+import { N8nInput, N8nInputLabel, N8nOption, N8nSelect, N8nIconButton } from '@n8n/design-system';
 import { useI18n } from '@n8n/i18n';
 import { useUIStore } from '@/stores/ui.store';
 import { useNDVStore } from '@/stores/ndv.store';
 import DraggableTarget from '@/components/DraggableTarget.vue';
 import { getMappedResult } from '@/utils/mappingUtils';
-import { hasExpressionMapping, isValueExpression } from '@/utils/nodeTypesUtils';
+import { isValueExpression } from '@/utils/nodeTypesUtils';
 import get from 'lodash/get';
 import debounce from 'lodash/debounce';
 import { completeExpressionSyntax, shouldConvertToExpression } from '@/utils/expressions';
-import { ElSwitch, ElInputNumber, ElDatePicker, ElInput } from 'element-plus';
 import ParameterOptions from '@/components/ParameterOptions.vue';
 import ExpressionParameterInput from '@/components/ExpressionParameterInput.vue';
-import { useToast } from '@/composables/useToast';
 
 type InnerSelectRef = InstanceType<typeof ElSelect>;
 
@@ -78,10 +76,6 @@ const props = defineProps({
 		type: Array as PropType<FieldItem[]>,
 		default: () => [],
 	},
-	parameter: {
-		type: Object as PropType<INodeProperties>,
-		required: true,
-	},
 	node: {
 		type: Object as PropType<INodeUi>,
 		required: true,
@@ -105,7 +99,7 @@ const emit = defineEmits<{
 	blur: [];
 	drop: [expression: string];
 	textInput: [update: IUpdateInformation];
-	update: [payload: any];
+	update: [payload: unknown];
 	'update:modelValue': [value: FieldItem[]];
 }>();
 
@@ -115,7 +109,6 @@ const inputField = ref<InstanceType<typeof N8nSelect> | null>(null);
 const i18n = useI18n();
 const uiStore = useUIStore();
 const ndvStore = useNDVStore();
-const toast = useToast();
 
 const workflowHelpers = useWorkflowHelpers();
 const nodeTypesStore = useNodeTypesStore();
@@ -127,13 +120,24 @@ const fieldSelectOptions = ref<Record<string, INodePropertyOptions[]>>({});
 const fieldSelectOptionsLoading = ref<Record<string, boolean>>({});
 const fieldLastQuery = ref<Record<string, string>>({});
 
-// Заглушки для используемых в шаблоне переменных/методов
+// UI flags
 const shouldRedactValue = false;
 
+// ------- helpers -------
 function getTypeOption<T>(optionName: string): T {
 	return getParameterTypeOption<T>(props.parameter, optionName);
 }
 
+function ensureExpression(val: string) {
+	return val.startsWith('=') ? val : '=' + val;
+}
+
+function finishDrag() {
+	// явне завершення drag у n8n, щоб «пігулка» не залипала
+	ndvStore.draggableStopDragging();
+}
+
+// ------- options loading -------
 async function loadRemoteParameterOptions() {
 	if (!props.node || !props.parameter) return;
 	remoteParameterOptionsLoadingIssues.value = null;
@@ -196,7 +200,6 @@ async function loadFieldSelectOptions(fieldName: string, entityId?: string, sear
 			},
 			credentials: props.node.credentials,
 		});
-		// Применяем только если это актуальный результат
 		if (fieldLastQuery.value[fieldName] === currentQuery) {
 			fieldSelectOptions.value[fieldName] = options;
 		}
@@ -204,12 +207,47 @@ async function loadFieldSelectOptions(fieldName: string, entityId?: string, sear
 		remoteParameterOptionsLoadingIssues.value =
 			error instanceof Error ? error.message : String(error);
 	}
-	// Сбрасываем загрузку только если актуально
 	if (fieldLastQuery.value[fieldName] === currentQuery) {
 		fieldSelectOptionsLoading.value[fieldName] = false;
 	}
 }
 
+async function loadCustomEntityOptions(fieldName: string, enumId?: string) {
+	if (!props.node || !props.parameter) return;
+	fieldSelectOptionsLoading.value[fieldName] = true;
+	fieldSelectOptions.value[fieldName] = [];
+	try {
+		const currentNodeParameters = (props.node as INodeUi).parameters;
+		const resolvedNodeParameters = workflowHelpers.resolveRequiredParameters(
+			props.parameter,
+			currentNodeParameters,
+		) as INodeParameters;
+		const loadOptionsMethod = getTypeOption<string | undefined>('loadEnumOptionsMethod');
+		const loadOptions = getTypeOption<ILoadOptions | undefined>('loadOptions');
+		const options = await nodeTypesStore.getNodeParameterOptions({
+			nodeTypeAndVersion: {
+				name: props.node.type,
+				version: props.node.typeVersion,
+			},
+			path: props.path,
+			methodName: loadOptionsMethod,
+			loadOptions,
+			currentNodeParameters: {
+				...resolvedNodeParameters,
+				fieldName,
+				enumId,
+			},
+			credentials: props.node.credentials,
+		});
+		fieldSelectOptions.value[fieldName] = options;
+	} catch (error: unknown) {
+		remoteParameterOptionsLoadingIssues.value =
+			error instanceof Error ? error.message : String(error);
+	}
+	fieldSelectOptionsLoading.value[fieldName] = false;
+}
+
+// ------- texts -------
 function getOptionsOptionDisplayName(option: INodePropertyOptions): string {
 	return props.isForCredential
 		? i18n.credText(uiStore.activeCredentialType).optionsOptionDisplayName(props.parameter, option)
@@ -242,6 +280,7 @@ const parameterOptions = computed(() => {
 	return options.filter(isValidParameterOption);
 });
 
+// ------- generic value update -------
 function valueChanged(untypedValue: unknown) {
 	if (remoteParameterOptionsLoading.value) return;
 	const oldValue = get(props.node, props.path) as unknown;
@@ -302,13 +341,16 @@ onMounted(async () => {
 	await loadRemoteParameterOptions();
 });
 
-const focus = () => {
-	innerSelect.value?.focus();
-};
+// ------- inputs -------
+const focus = () => innerSelect.value?.focus();
+const blur = () => innerSelect.value?.blur();
 
-const blur = () => {
-	innerSelect.value?.blur();
-};
+// remove field item by index
+function removeField(index: number) {
+	const next = Array.isArray(props.modelValue) ? [...props.modelValue] : [];
+	next.splice(index, 1);
+	emit('update', next);
+}
 
 const focusOnInput = () => {
 	if (!innerSelect.value) return;
@@ -343,9 +385,7 @@ const valueChangedCustom = async (value: string) => {
 	}
 };
 
-const onBlur = () => {
-	emit('blur');
-};
+const onBlur = () => emit('blur');
 
 const onBlurInput = () => {
 	emit('blur');
@@ -357,20 +397,23 @@ const setFocusSelect = (item: FieldItem) => {
 	void loadFieldSelectOptions(item.field, item.entityId);
 };
 
+const setFocusEnum = (item: FieldItem) => {
+	emit('focus');
+	if (!fieldSelectOptions.value[item.field] || fieldSelectOptions.value[item.field].length === 0) {
+		void loadCustomEntityOptions(item.field, item.enumId);
+	}
+};
+
 const updateInputValue = (item: FieldItem, value: string) => {
-	// Для типів, що мають спеціальні UI (boolean/number/date/json),
-	// оновлення відбувається через окремі обробники. Тут — дефолт: зберігаємо як рядок.
 	item.value = value;
 };
 
-const getStringInputType = computed(() => {
-	if (getTypeOption('password') === true) return 'password';
-	return 'text';
-});
+const getStringInputType = computed(() =>
+	getTypeOption('password') === true ? 'password' : 'text',
+);
 
-const isRemoteParameterOption = (option: INodePropertyOptions): boolean => {
-	return option && typeof option === 'object' && 'value' in option;
-};
+const isRemoteParameterOption = (option: INodePropertyOptions): boolean =>
+	option && typeof option === 'object' && 'value' in option;
 
 const fieldSearchDebouncers = new Map<string, (q: string) => void>();
 
@@ -393,7 +436,6 @@ function onRemoteSearch(item: FieldItem, query: string) {
 function getRelationModelValue(item: FieldItem) {
 	const v = item.value as unknown;
 	if (item.multiple) {
-		// Для multi-select возвращаем массив значений
 		if (Array.isArray(v)) {
 			return v.map((entry) => {
 				if (entry && typeof entry === 'object' && 'value' in (entry as Record<string, unknown>)) {
@@ -402,13 +444,11 @@ function getRelationModelValue(item: FieldItem) {
 				return entry as string | number | boolean | null;
 			});
 		}
-		// если сохранено одиночне значення/об'єкт — оборачиваем в масив
 		if (v && typeof v === 'object' && 'value' in (v as Record<string, unknown>)) {
 			return [(v as INodePropertyOptions).value as string | number | boolean | null];
 		}
 		return v !== null && v !== undefined ? [v as string | number | boolean | null] : [];
 	}
-	// single-select
 	if (v && typeof v === 'object' && 'value' in (v as Record<string, unknown>)) {
 		return (v as INodePropertyOptions).value as string | number | boolean | null;
 	}
@@ -440,7 +480,6 @@ function onRelationSelect(
 		return;
 	}
 
-	// single-select
 	const selectedOption = options.find((o) => o.value === selected);
 	const updatedItems = (props.modelValue as FieldItem[]).map((i: FieldItem) =>
 		i.field === item.field ? { ...i, value: selectedOption ?? selected } : i,
@@ -520,7 +559,6 @@ function onDatePicked(item: FieldItem, val: Date | null, kind: 'date' | 'datetim
 }
 
 function onJsonChanged(item: FieldItem, raw: string) {
-	// Парсимо одразу; якщо не вдалось — зберігаємо як рядок
 	const parsed = toJSONValue(raw);
 	item.value = parsed as any;
 }
@@ -530,53 +568,18 @@ function onJsonBlur() {
 }
 
 function isExpressionItem(item: FieldItem) {
-	// return typeof item.value === 'string' && String(item.value).startsWith('=');
 	return forceShowExpression.value[item.field] === true;
 }
 
-const expressionDisplayValue = (item) => {
-	if (forceShowExpression.value[item.field]) {
-		return '';
-	}
-
+const expressionDisplayValue = (item: any) => {
+	if (forceShowExpression.value[item.field]) return '';
 	const value = isResourceLocatorValue(item.value) ? item.value.value : item.value;
-	if (typeof value === 'string' && value.startsWith('=')) {
-		return value.slice(1);
-	}
-
+	if (typeof value === 'string' && value.startsWith('=')) return value.slice(1);
 	return `${item.value ?? ''}`;
 };
 
-function onDropToItem(event: DragEvent, item: FieldItem) {
-	if (!event || !event.dataTransfer) return;
-	event.preventDefault();
-	let text = '';
-	try {
-		text = event.dataTransfer.getData('text/plain') || '';
-		if (!text) {
-			const allTypes = Array.from(event.dataTransfer.types || []);
-			for (const t of allTypes) {
-				const v = event.dataTransfer.getData(t);
-				if (v) {
-					text = v;
-					break;
-				}
-			}
-		}
-	} catch {}
-	if (!text) return;
-	// перетворюємо у вираз n8n
-	const expr = formatAsExpression(text, 'string');
-	item.value = expr as unknown as string;
-	emit('update', props.modelValue);
-}
-
-// === Added for per-field expressions & drag mapping ===
+// --------- DnD state ----------
 const forceShowExpression = ref<Record<string, boolean>>({});
-
-function ensureExpression(val: string) {
-	return val.startsWith('=') ? val : '=' + val;
-}
 
 function applyComputed(item: FieldItem, opt: ComputedOption) {
 	item.value = ensureExpression(opt.expression) as unknown as string;
@@ -600,71 +603,41 @@ function clearExpression(item: FieldItem) {
 	emit('update', props.modelValue);
 }
 
-function onDropMapping(raw: string, item: FieldItem, _event: MouseEvent) {
-	// Don't stop propagation here — Draggable.vue relies on window mouseup to end dragging
-	_event.stopPropagation();
-	// event.preventDefault();
-	const current = item.value as unknown as string | number | boolean | null;
+// ✅ головний drop-хендлер із ручною фіналізацією і стоп-пропагацією
+function onDropMapping(raw: string, item: FieldItem, event?: MouseEvent) {
+	// зупиняємо Vue-ланцюг drop (щоб батьківські DraggableTarget не отримали подію)
+	event?.stopPropagation?.();
+
+	const current = item.value as string | number | boolean | null;
 	let updated: string;
+
 	try {
-		const mapped = getMappedResult(props.parameter as any, raw, current as unknown as any);
-		updated = typeof mapped === 'string' ? mapped : String(mapped);
-	} catch (e) {
+		const mapped = getMappedResult(props.parameter as any, raw, current as any);
+		updated = ensureExpression(typeof mapped === 'string' ? mapped : String(mapped));
+	} catch {
 		updated = ensureExpression(raw);
 	}
+
+	// показуємо поле як expression
 	forceShowExpression.value[item.field] = true;
 
-	setTimeout(() => {
-		if (props.node) {
-			props.eventBus.emit('drop', updated);
+	// підставляємо значення і емітимо апдейт
+	item.value = updated as unknown as string;
+	emit('update', props.modelValue);
 
-			if (!ndvStore.isMappingOnboarded) {
-				toast.showMessage({
-					title: i18n.baseText('dataMapping.success.title'),
-					message: i18n.baseText('dataMapping.success.moreInfo'),
-					type: 'success',
-				});
-
-				ndvStore.setMappingOnboarded();
-			}
-
-			ndvStore.setMappingTelemetry({
-				dest_node_type: props.node.type,
-				dest_parameter: props.path,
-				dest_parameter_mode: 'expression',
-				dest_parameter_empty: '',
-				dest_parameter_had_mapping: true,
-				success: true,
-			});
-
-			// Apply the mapped value to the item and emit the update once
-			item.value = updated as unknown as string;
-
-			emit('update', props.modelValue);
-			// Safety net: ensure draggable state is reset so the preview pill doesn't stick to cursor
-			ndvStore.draggableStopDragging();
-		}
-	}, 200);
+	// ручна фіналізація drag (щоб «пігулка» не залипала, а глобальний dnd стан очистився)
+	finishDrag();
 }
-
-// === End added ===
 
 function onOptionSelected(cmd: string, item: FieldItem) {
 	if (cmd === 'addExpression') {
 		enableExpression(item);
-	} else if (cmd === 'resetValue') {
-		clearExpression(item);
-	} else if (cmd === 'removeExpression') {
+	} else if (cmd === 'resetValue' || cmd === 'removeExpression') {
 		clearExpression(item);
 	}
 }
 
-defineExpose({
-	focus,
-	blur,
-	focusOnInput,
-	innerSelect,
-});
+defineExpose({ focus, blur, focusOnInput, innerSelect });
 </script>
 
 <template>
@@ -679,10 +652,11 @@ defineExpose({
 		<div v-if="$slots.prepend" :class="$style.prepend">
 			<slot name="prepend" />
 		</div>
+
 		<div style="flex-grow: 1; width: 100%; display: flex; flex-direction: column; width: 100%">
 			<template v-if="Array.isArray(modelValue)">
 				<div
-					v-for="item in modelValue"
+					v-for="(item, index) in modelValue"
 					:key="item.field"
 					style="
 						margin: 10px 0;
@@ -709,13 +683,24 @@ defineExpose({
 								:is-content-overridden="true"
 								@update:model-value="(val) => onOptionSelected(val, item as FieldItem)"
 							/>
+							<N8nIconButton
+								type="tertiary"
+								size="mini"
+								icon="node-trash"
+								:aria-label="i18n.baseText('generic.remove')"
+								style="margin-left: var(--spacing-3xs)"
+								@click="removeField(index)"
+							/>
 						</template>
+
+						<!-- ключове: блокуємо Vue-пропагацію drop тут -->
 						<DraggableTarget
 							type="mapping"
 							sticky
 							:sticky-offset="[3, 3]"
 							style="flex: 1"
-							@drop="
+							@dragover.prevent
+							@drop.capture.stop.prevent="
 								(payload: string, event: MouseEvent) =>
 									onDropMapping(payload, item as FieldItem, event)
 							"
@@ -730,6 +715,10 @@ defineExpose({
 								@modal-opener-click="openExpressionEditorModal"
 								@focus="setFocus"
 								@blur="onBlur"
+								@drop.stop="
+									(payload: string, event: MouseEvent) =>
+										onDropMapping(payload, item as FieldItem, event)
+								"
 							/>
 
 							<N8nSelect
@@ -745,9 +734,87 @@ defineExpose({
 								@update:model-value="(value) => onRelationSelect(item as FieldItem, value)"
 								@keydown.stop
 								@focus="setFocusSelect(item as FieldItem)"
+								@drop.stop="
+									(payload: string, event: MouseEvent) =>
+										onDropMapping(payload, item as FieldItem, event)
+								"
 							>
 								<N8nOption
 									v-for="option in fieldSelectOptions[item.field] || []"
+									:key="option.value.toString()"
+									:value="option.value"
+									:label="getOptionsOptionDisplayName(option)"
+									data-test-id="parameter-input-item"
+								>
+									<div class="list-option">
+										<div
+											class="option-headline"
+											:class="{ 'remote-parameter-option': isRemoteParameterOption(option) }"
+										>
+											{{ getOptionsOptionDisplayName(option) }}
+										</div>
+										<div
+											v-if="option.description"
+											v-n8n-html="getOptionsOptionDescription(option)"
+											class="option-description"
+										></div>
+									</div>
+								</N8nOption>
+							</N8nSelect>
+
+							<N8nSelect
+								v-else-if="item.type === 'custom_enum' && !isExpressionItem(item as FieldItem)"
+								:size="size"
+								:multiple="item.multiple === true"
+								:model-value="getRelationModelValue(item as FieldItem)"
+								:loading="fieldSelectOptionsLoading[item.field]"
+								title="Value"
+								@update:model-value="(value) => onRelationSelect(item as FieldItem, value)"
+								@keydown.stop
+								@focus="setFocusEnum(item as FieldItem)"
+								@drop.stop="
+									(payload: string, event: MouseEvent) =>
+										onDropMapping(payload, item as FieldItem, event)
+								"
+							>
+								<N8nOption
+									v-for="option in fieldSelectOptions[item.field] || []"
+									:key="option.value.toString()"
+									:value="option.value"
+									:label="getOptionsOptionDisplayName(option)"
+									data-test-id="parameter-input-item"
+								>
+									<div class="list-option">
+										<div
+											class="option-headline"
+											:class="{ 'remote-parameter-option': isRemoteParameterOption(option) }"
+										>
+											{{ getOptionsOptionDisplayName(option) }}
+										</div>
+										<div
+											v-if="option.description"
+											v-n8n-html="getOptionsOptionDescription(option)"
+											class="option-description"
+										></div>
+									</div>
+								</N8nOption>
+							</N8nSelect>
+
+							<N8nSelect
+								v-else-if="item.type === 'enum' && !isExpressionItem(item as FieldItem)"
+								:size="size"
+								:multiple="item.multiple === true"
+								:model-value="item.value"
+								title="Value"
+								@update:model-value="(value) => (item.value = value)"
+								@keydown.stop
+								@drop.stop="
+									(payload: string, event: MouseEvent) =>
+										onDropMapping(payload, item as FieldItem, event)
+								"
+							>
+								<N8nOption
+									v-for="option in item.options || []"
 									:key="option.value.toString()"
 									:value="option.value"
 									:label="getOptionsOptionDisplayName(option)"
@@ -775,6 +842,10 @@ defineExpose({
 								"
 								:model-value="toBoolean(item.value as any)"
 								@update:model-value="(val: boolean) => onBooleanChanged(item as FieldItem, val)"
+								@drop.stop="
+									(payload: string, event: MouseEvent) =>
+										onDropMapping(payload, item as FieldItem, event)
+								"
 							/>
 
 							<ElInputNumber
@@ -790,6 +861,10 @@ defineExpose({
 								@update:model-value="
 									(val: number | null) => onNumberChanged(item as FieldItem, val)
 								"
+								@drop.stop="
+									(payload: string, event: MouseEvent) =>
+										onDropMapping(payload, item as FieldItem, event)
+								"
 							/>
 
 							<ElDatePicker
@@ -799,6 +874,10 @@ defineExpose({
 								type="date"
 								:model-value="toDateObj(item.value)"
 								@update:model-value="(d: Date | null) => onDatePicked(item as FieldItem, d, 'date')"
+								@drop.stop="
+									(payload: string, event: MouseEvent) =>
+										onDropMapping(payload, item as FieldItem, event)
+								"
 							/>
 
 							<ElDatePicker
@@ -809,6 +888,10 @@ defineExpose({
 								:model-value="toDateObj(item.value)"
 								@update:model-value="
 									(d: Date | null) => onDatePicked(item as FieldItem, d, 'datetime')
+								"
+								@drop.stop="
+									(payload: string, event: MouseEvent) =>
+										onDropMapping(payload, item as FieldItem, event)
 								"
 							/>
 
@@ -823,6 +906,10 @@ defineExpose({
 								"
 								@update:model-value="(val: string) => onJsonChanged(item as FieldItem, val)"
 								@blur="onJsonBlur"
+								@drop.stop="
+									(payload: string, event: MouseEvent) =>
+										onDropMapping(payload, item as FieldItem, event)
+								"
 							/>
 
 							<N8nInput
@@ -838,12 +925,17 @@ defineExpose({
 								@focus="setFocus"
 								@blur="onBlurInput"
 								@paste="onPaste"
+								@drop.stop="
+									(payload: string, event: MouseEvent) =>
+										onDropMapping(payload, item as FieldItem, event)
+								"
 							/>
 						</DraggableTarget>
 					</N8nInputLabel>
 				</div>
 			</template>
 		</div>
+
 		<N8nSelect
 			ref="inputField"
 			:size="size"

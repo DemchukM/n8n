@@ -849,7 +849,8 @@
       "dist/nodes/Transform/Sort/Sort.node.js",
       "dist/nodes/Transform/Summarize/Summarize.node.js",
       "dist/nodes/Suppa/SuppaTrigger.node.js",
-      "dist/nodes/Suppa/Suppa.node.js"
+      "dist/nodes/Suppa/Suppa.node.js",
+      "dist/nodes/Suppa/SuppaRequest.node.js"
     ]
   },
   "devDependencies": {
